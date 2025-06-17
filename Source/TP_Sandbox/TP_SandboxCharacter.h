@@ -30,6 +30,11 @@ class ATP_SandboxCharacter : public ACharacter
 	/** Follow camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
+
+	bool CanWarp;
+	FVector VaultStartPosition = FVector(0, 0, 0);
+	FVector VaultMiddlePosition = FVector(0, 0, 0);
+	FVector VaultLandPosition = FVector(0, 0, 0);
 	
 protected:
 
@@ -66,7 +71,10 @@ protected:
 
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
+	
+	void VaultMotionWarp();
 
+	void VaultMontageEnded(UAnimMontage* vaultMontage, bool interrupted);
 public:
 
 	/** Handles move inputs from either controls or UI interfaces */
@@ -85,6 +93,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoJumpEnd();
 
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoVault();
+protected:
+	FOnMontageEnded OnVaultMontageEnded;
+	
+	UPROPERTY(EditAnywhere, Category="Vault")
+	UAnimMontage* VaultMontage;
+	
 public:
 
 	/** Returns CameraBoom subobject **/

@@ -10,6 +10,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "MotionWarpingComponent.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -17,7 +18,7 @@ ATP_SandboxCharacter::ATP_SandboxCharacter()
 {
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-		
+
 	// Don't rotate when the controller rotates. Let that just affect the camera.
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
@@ -47,6 +48,8 @@ ATP_SandboxCharacter::ATP_SandboxCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
+	OnVaultMontageEnded.BindUObject(this, &ATP_SandboxCharacter::VaultMontageEnded);
+
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
 }
@@ -54,22 +57,26 @@ ATP_SandboxCharacter::ATP_SandboxCharacter()
 void ATP_SandboxCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	// Set up action bindings
-	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
-		
+	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
+	{
 		// Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ATP_SandboxCharacter::Move);
-		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &ATP_SandboxCharacter::Look);
+		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this,
+		                                   &ATP_SandboxCharacter::Look);
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ATP_SandboxCharacter::Look);
 	}
 	else
 	{
-		UE_LOG(LogTemplateCharacter, Error, TEXT("'%s' Failed to find an Enhanced Input component! This template is built to use the Enhanced Input system. If you intend to use the legacy system, then you will need to update this C++ file."), *GetNameSafe(this));
+		UE_LOG(LogTemplateCharacter, Error,
+		       TEXT(
+			       "'%s' Failed to find an Enhanced Input component! This template is built to use the Enhanced Input system. If you intend to use the legacy system, then you will need to update this C++ file."
+		       ), *GetNameSafe(this));
 	}
 }
 
@@ -89,6 +96,122 @@ void ATP_SandboxCharacter::Look(const FInputActionValue& Value)
 
 	// route the input
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
+}
+
+void ATP_SandboxCharacter::VaultMotionWarp()
+{
+	float meshWorldZ = GetMesh()->GetComponentLocation().Z;
+	if (CanWarp && meshWorldZ - 50 <= VaultLandPosition.Z && meshWorldZ + 50 >= VaultLandPosition.Z)
+	{
+		GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Flying);
+		SetActorEnableCollision(false);
+		
+		FMotionWarpingTarget motionStartTarget;
+		motionStartTarget.Name = "VaultStart";
+		motionStartTarget.Location = VaultStartPosition;
+		motionStartTarget.Rotation = GetActorRotation();
+
+		FMotionWarpingTarget motionMidTarget;
+		motionMidTarget.Name = "VaultMid";
+		motionMidTarget.Location = VaultMiddlePosition;
+		motionMidTarget.Rotation = GetActorRotation();
+
+		FMotionWarpingTarget motionEndTarget;
+		motionEndTarget.Name = "VaultEnd";
+		motionEndTarget.Location = VaultLandPosition;
+		motionEndTarget.Rotation = GetActorRotation();
+
+		auto warpingComponent = GetComponentByClass<UMotionWarpingComponent>();
+		warpingComponent->AddOrUpdateWarpTarget(motionStartTarget);
+		warpingComponent->AddOrUpdateWarpTarget(motionMidTarget);
+		warpingComponent->AddOrUpdateWarpTarget(motionEndTarget);
+
+		// play the vault montage
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			const float MontageLength = AnimInstance->Montage_Play(VaultMontage,
+				1.0f,
+				EMontagePlayReturnType::MontageLength,
+				0.0f,
+				true
+			);
+
+			// has the montage played successfully?
+			if (MontageLength > 0.0f)
+			{
+				AnimInstance->Montage_SetEndDelegate(OnVaultMontageEnded, VaultMontage);
+			}
+		}
+	}
+}
+
+void ATP_SandboxCharacter::VaultMontageEnded(UAnimMontage* vaultMontage, bool interrupted)
+{
+	GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+	SetActorEnableCollision(true);
+	CanWarp = false;
+	VaultLandPosition = FVector(0.0, 0.0, -20000);
+}
+
+void ATP_SandboxCharacter::DoVault()
+{
+	const FName TraceTag("MyTraceTag");
+
+	GetWorld()->DebugDrawTraceTag = TraceTag;
+
+	FCollisionQueryParams CollisionParams;
+	CollisionParams.TraceTag = TraceTag;
+
+	FHitResult horiHit;
+	FCollisionShape heightSphere = FCollisionShape::MakeSphere(5);
+	
+	for (int i = 0; i < 3; i++)
+	{
+		FVector start = GetActorLocation() + FVector(0, 0, i * 30);
+		FVector end = start + GetActorForwardVector() * 180.0f;
+		if (GetWorld()->SweepSingleByChannel(horiHit, start, end, FQuat::Identity, ECC_Visibility, heightSphere, CollisionParams))
+		{
+			break;
+		}
+	}
+
+	if (!horiHit.IsValidBlockingHit())
+		return;
+
+	FCollisionShape distanceSphere = FCollisionShape::MakeSphere(10);
+	FHitResult vertHit;
+	
+	for (int i = 0; i < 6; i++)
+	{
+		FVector start = horiHit.Location + FVector(0, 0, 100) + GetActorForwardVector() * i * 50.0f;
+		FVector end = start - FVector(0, 0, 100);
+
+		if (GetWorld()->SweepSingleByChannel(vertHit, start, end, FQuat::Identity, ECC_Visibility, distanceSphere, CollisionParams))
+		{
+			if (i == 0)
+			{
+				VaultStartPosition = vertHit.Location;
+				DrawDebugSphere(GetWorld(), VaultStartPosition, 10, 12, FColor::Red, true, 0.5f);
+			}
+
+			VaultMiddlePosition = vertHit.Location;
+			CanWarp = true;
+			DrawDebugSphere(GetWorld(), VaultMiddlePosition, 10, 12, FColor::Red, true, 0.5f);
+		}
+		else
+		{
+			FHitResult vaultEnd;
+			FVector vaultTraceStart = start + GetActorForwardVector() * 80.0f;
+			FVector vaultTraceEnd = vaultTraceStart + FVector(0, 0, -1000);
+			if (GetWorld()->LineTraceSingleByChannel(vaultEnd, vaultTraceStart, vaultTraceEnd, ECC_Visibility, CollisionParams))
+			{
+				VaultLandPosition = vaultEnd.Location;
+				break;
+			}
+		}
+	}
+
+	VaultMotionWarp();
 }
 
 void ATP_SandboxCharacter::DoMove(float Right, float Forward)
