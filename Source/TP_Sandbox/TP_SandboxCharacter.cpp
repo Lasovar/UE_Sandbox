@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TP_SandboxCharacter.h"
+
+#include "BPI_Assassination.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -105,7 +107,7 @@ void ATP_SandboxCharacter::VaultMotionWarp()
 	{
 		GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Flying);
 		SetActorEnableCollision(false);
-		
+
 		FMotionWarpingTarget motionStartTarget;
 		motionStartTarget.Name = "VaultStart";
 		motionStartTarget.Location = VaultStartPosition;
@@ -130,10 +132,10 @@ void ATP_SandboxCharacter::VaultMotionWarp()
 		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
 		{
 			const float MontageLength = AnimInstance->Montage_Play(VaultMontage,
-				1.0f,
-				EMontagePlayReturnType::MontageLength,
-				0.0f,
-				true
+			                                                       1.0f,
+			                                                       EMontagePlayReturnType::MontageLength,
+			                                                       0.0f,
+			                                                       true
 			);
 
 			// has the montage played successfully?
@@ -164,12 +166,13 @@ void ATP_SandboxCharacter::DoVault()
 
 	FHitResult horiHit;
 	FCollisionShape heightSphere = FCollisionShape::MakeSphere(5);
-	
+
 	for (int i = 0; i < 3; i++)
 	{
 		FVector start = GetActorLocation() + FVector(0, 0, i * 30);
 		FVector end = start + GetActorForwardVector() * 180.0f;
-		if (GetWorld()->SweepSingleByChannel(horiHit, start, end, FQuat::Identity, ECC_Visibility, heightSphere, CollisionParams))
+		if (GetWorld()->SweepSingleByChannel(horiHit, start, end, FQuat::Identity, ECC_Visibility, heightSphere,
+		                                     CollisionParams))
 		{
 			break;
 		}
@@ -180,13 +183,14 @@ void ATP_SandboxCharacter::DoVault()
 
 	FCollisionShape distanceSphere = FCollisionShape::MakeSphere(10);
 	FHitResult vertHit;
-	
+
 	for (int i = 0; i < 6; i++)
 	{
 		FVector start = horiHit.Location + FVector(0, 0, 100) + GetActorForwardVector() * i * 50.0f;
 		FVector end = start - FVector(0, 0, 100);
 
-		if (GetWorld()->SweepSingleByChannel(vertHit, start, end, FQuat::Identity, ECC_Visibility, distanceSphere, CollisionParams))
+		if (GetWorld()->SweepSingleByChannel(vertHit, start, end, FQuat::Identity, ECC_Visibility, distanceSphere,
+		                                     CollisionParams))
 		{
 			if (i == 0)
 			{
@@ -203,7 +207,8 @@ void ATP_SandboxCharacter::DoVault()
 			FHitResult vaultEnd;
 			FVector vaultTraceStart = start + GetActorForwardVector() * 80.0f;
 			FVector vaultTraceEnd = vaultTraceStart + FVector(0, 0, -1000);
-			if (GetWorld()->LineTraceSingleByChannel(vaultEnd, vaultTraceStart, vaultTraceEnd, ECC_Visibility, CollisionParams))
+			if (GetWorld()->LineTraceSingleByChannel(vaultEnd, vaultTraceStart, vaultTraceEnd, ECC_Visibility,
+			                                         CollisionParams))
 			{
 				VaultLandPosition = vaultEnd.Location;
 				break;
@@ -212,6 +217,43 @@ void ATP_SandboxCharacter::DoVault()
 	}
 
 	VaultMotionWarp();
+}
+
+void ATP_SandboxCharacter::DoAssassinate()
+{
+	TArray<AActor*> overlaps;
+	GetOverlappingActors(overlaps);
+
+	for (const auto& Actor : overlaps)
+	{
+		if (Actor && Actor->Implements<UBPI_Assassination>())
+		{
+			if (IBPI_Assassination* Assassination = Cast<IBPI_Assassination>(Actor))
+			{
+				auto [location, rotator] = Assassination->StealthBackAssassin();
+
+				if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+				{
+					AnimInstance->Montage_Play(AssassinationMontage);
+
+					FMotionWarpingTarget motionAssassinateTarget;
+					motionAssassinateTarget.Name = "AssassinationWarp";
+					motionAssassinateTarget.Location = location;
+					motionAssassinateTarget.Rotation = rotator;
+
+					auto warpingComponent = GetComponentByClass<UMotionWarpingComponent>();
+					warpingComponent->AddOrUpdateWarpTarget(motionAssassinateTarget);
+
+					break;
+				}
+			}
+
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 1.0f, FColor::Yellow, TEXT("Couldn't Cast interface"));
+			}
+		}
+	}
 }
 
 void ATP_SandboxCharacter::DoMove(float Right, float Forward)
@@ -248,6 +290,8 @@ void ATP_SandboxCharacter::DoJumpStart()
 {
 	// signal the character to jump
 	Jump();
+
+	this->UnCrouch();
 }
 
 void ATP_SandboxCharacter::DoJumpEnd()

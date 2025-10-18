@@ -95,11 +95,19 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoVault();
+	
+
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoAssassinate();
 protected:
 	FOnMontageEnded OnVaultMontageEnded;
 	
 	UPROPERTY(EditAnywhere, Category="Vault")
 	UAnimMontage* VaultMontage;
+
+	
+	UPROPERTY(EditAnywhere, Category="Assassination")
+	UAnimMontage* AssassinationMontage;
 	
 public:
 
