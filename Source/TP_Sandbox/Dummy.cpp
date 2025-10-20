@@ -4,9 +4,11 @@
 #include "Dummy.h"
 
 #include "TP_SandboxCharacter.h"
+#include "AssetTypeActions/AssetDefinition_SoundBase.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/WidgetComponent.h"
+#include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
 
 // Sets default values
@@ -86,6 +88,18 @@ TTuple<FVector, FRotator> ADummy::Assassinate()
 	}
 
 	// Ragdoll
+
+
+	FTimerHandle TimerHandle;
+	GetWorld()->GetTimerManager().SetTimer(
+		TimerHandle,
+		[this]
+		{
+			UGameplayStatics::PlaySoundAtLocation(GetWorld(), DeathSound, GetActorLocation());
+		},
+		1.6f,
+		false
+	);
 
 	GetWorld()->GetTimerManager().SetTimer(
 		RagdollTimerHandle,

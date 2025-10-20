@@ -2,6 +2,7 @@
 
 #include "TP_SandboxCharacter.h"
 
+#include "AttackSystem.h"
 #include "BPI_Assassination.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
@@ -13,6 +14,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "MotionWarpingComponent.h"
+#include "PlayerStats.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -50,7 +52,17 @@ ATP_SandboxCharacter::ATP_SandboxCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
+	Stats = CreateDefaultSubobject<UPlayerStats>(TEXT("Player Stats"));
+	Stats->OnDeath.AddDynamic(this, &ATP_SandboxCharacter::OnDeath);
+	Stats->OnStaminaUpdated.AddDynamic(this, &ATP_SandboxCharacter::OnStaminaUpdated);
+
+	AttackSystem = CreateDefaultSubobject<UAttackSystem>(TEXT("Attack System"));
+
+	OnTakeAnyDamage.AddDynamic(this, &ATP_SandboxCharacter::OnTakeDamage);
+
 	OnVaultMontageEnded.BindUObject(this, &ATP_SandboxCharacter::VaultMontageEnded);
+	
+	StaminaRegenTimer = FTimer(StaminaRegenDelay);
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
@@ -64,6 +76,15 @@ void ATP_SandboxCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		// Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+
+		// Sprinting
+		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Started, this,
+		                                   &ATP_SandboxCharacter::StartSprint);
+		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this,
+		                                   &ATP_SandboxCharacter::StopSprint);
+
+		// Attacking
+		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Started, this, &ATP_SandboxCharacter::Attack);
 
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ATP_SandboxCharacter::Move);
@@ -82,6 +103,50 @@ void ATP_SandboxCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	}
 }
 
+void ATP_SandboxCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+}
+
+void ATP_SandboxCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	if (IsSprinting)
+	{
+		if (GetVelocity().Length() > 5 && GetCharacterMovement()->MovementMode == MOVE_Walking && !Stats->DecreaseStamina(StaminaDepletingSpeed * DeltaTime))
+		{
+			IsSprinting = false;
+			GetCharacterMovement()->MaxWalkSpeed = 500.0f;
+		}
+		else
+		{
+			GetCharacterMovement()->MaxWalkSpeed = SprintingSpeed;
+		}
+	}
+	else
+	{
+		GetCharacterMovement()->MaxWalkSpeed = 500.0f;
+	}
+
+	StaminaRegenTimer.Tick(DeltaTime);
+	if (StaminaRegenTimer.IsElapsed())
+	{
+		Stats->IncreaseStamina(StaminaRegenRate * DeltaTime);
+	}
+}
+
+void ATP_SandboxCharacter::StartSprint(const FInputActionValue& Value)
+{
+	IsSprinting = true;
+	UnCrouch();
+}
+
+void ATP_SandboxCharacter::StopSprint(const FInputActionValue& Value)
+{
+	IsSprinting = false;
+}
+
 void ATP_SandboxCharacter::Move(const FInputActionValue& Value)
 {
 	// input is a Vector2D
@@ -98,6 +163,11 @@ void ATP_SandboxCharacter::Look(const FInputActionValue& Value)
 
 	// route the input
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
+}
+
+void ATP_SandboxCharacter::Attack(const FInputActionValue& Value)
+{
+	AttackSystem->SwordAttack();
 }
 
 void ATP_SandboxCharacter::VaultMotionWarp()
@@ -153,6 +223,30 @@ void ATP_SandboxCharacter::VaultMontageEnded(UAnimMontage* vaultMontage, bool in
 	SetActorEnableCollision(true);
 	CanWarp = false;
 	VaultLandPosition = FVector(0.0, 0.0, -20000);
+}
+
+void ATP_SandboxCharacter::OnTakeDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType,
+                                        AController* InstigatedBy, AActor* DamageCauser)
+{
+	Stats->DecreaseHealth(Damage);
+}
+
+void ATP_SandboxCharacter::OnDeath()
+{
+	if (const auto playerController = Cast<APlayerController>(GetController()))
+	{
+		DisableInput(playerController);
+	}
+	GetMesh()->SetSimulatePhysics(true);
+	UE_LOG(LogTemp, Display, TEXT("OnDeath"));
+}
+
+void ATP_SandboxCharacter::OnStaminaUpdated(float currentStamina, float previousStamina, float maxStamina)
+{
+	if (currentStamina < previousStamina)
+	{
+		StaminaRegenTimer.Restart();
+	}
 }
 
 void ATP_SandboxCharacter::DoVault()

@@ -54,6 +54,9 @@ private:
 protected:
 	UPROPERTY(EditAnywhere, Category="Assassination")
 	UAnimMontage* AssassinatedMontage;
+	
+	UPROPERTY(EditAnywhere, Category="Assassination")
+	USoundBase* DeathSound;
 
 private:
 	FTimerHandle RagdollTimerHandle;

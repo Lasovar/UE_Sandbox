@@ -3,10 +3,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "InputActionValue.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
+#include "Utility/Timer.h"
 #include "TP_SandboxCharacter.generated.h"
 
+class UAttackSystem;
+class UPlayerStats;
+class UWidgetComponent;
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
@@ -30,6 +35,12 @@ class ATP_SandboxCharacter : public ACharacter
 	/** Follow camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
+	
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Player Stats", meta = (AllowPrivateAccess = "true"))
+	UPlayerStats* Stats;
+	
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Attack System", meta = (AllowPrivateAccess = "true"))
+	UAttackSystem* AttackSystem;
 
 	bool CanWarp;
 	FVector VaultStartPosition = FVector(0, 0, 0);
@@ -41,6 +52,10 @@ protected:
 	/** Jump Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
 	UInputAction* JumpAction;
+	
+	/** Sprint Input Action */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
+	UInputAction* SprintAction;
 
 	/** Move Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
@@ -53,6 +68,9 @@ protected:
 	/** Mouse Look Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
 	UInputAction* MouseLookAction;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
+	UInputAction* AttackAction;
 
 public:
 
@@ -64,7 +82,13 @@ protected:
 	/** Initialize input action bindings */
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
+	virtual void BeginPlay() override;
+
+	virtual void Tick(float DeltaTime) override;
+
 protected:
+	void StartSprint(const FInputActionValue& Value);
+	void StopSprint(const FInputActionValue& Value);
 
 	/** Called for movement input */
 	void Move(const FInputActionValue& Value);
@@ -72,9 +96,20 @@ protected:
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
 	
+	void Attack(const FInputActionValue& Value);
+	
 	void VaultMotionWarp();
 
 	void VaultMontageEnded(UAnimMontage* vaultMontage, bool interrupted);
+
+	UFUNCTION()
+	void OnTakeDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType, AController* InstigatedBy, AActor* DamageCauser);
+
+	UFUNCTION()
+	void OnDeath();
+	
+	UFUNCTION()
+	void OnStaminaUpdated(float currentStamina, float previousStamina, float maxStamina);
 public:
 
 	/** Handles move inputs from either controls or UI interfaces */
@@ -96,18 +131,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoVault();
 	
-
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoAssassinate();
-protected:
-	FOnMontageEnded OnVaultMontageEnded;
+
+	UPROPERTY(EditAnywhere, Category="Character Movement: Walking")
+	float SprintingSpeed = 750.0f;
+	
+	UPROPERTY(EditAnywhere, Category="HUD")
+	TObjectPtr<UUserWidget> WidgetHUD;
 	
 	UPROPERTY(EditAnywhere, Category="Vault")
 	UAnimMontage* VaultMontage;
-
 	
 	UPROPERTY(EditAnywhere, Category="Assassination")
 	UAnimMontage* AssassinationMontage;
+	
+	UPROPERTY(EditAnywhere, Category="Character Movement: Walking")
+	float StaminaDepletingSpeed = 2.0f;
+	UPROPERTY(EditAnywhere, Category="Character Movement: Walking")
+	float StaminaRegenDelay = 1.0f;
+	UPROPERTY(EditAnywhere, Category="Character Movement: Walking")
+	float StaminaRegenRate = 3.0f;
+protected:
+	FOnMontageEnded OnVaultMontageEnded;
+	bool IsSprinting = false;
+	FTimer StaminaRegenTimer;
 	
 public:
 
