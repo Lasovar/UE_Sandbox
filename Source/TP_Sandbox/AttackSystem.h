@@ -7,6 +7,7 @@
 #include "AttackSystem.generated.h"
 
 
+class ATP_SandboxCharacter;
 struct FInputActionValue;
 class UInputAction;
 
@@ -23,14 +24,18 @@ public:
 	void AllowNextAttack();
 
 	void CancelAttack();
+
+	void StartMeleeTrace();
 	
 	void StartSwordTrace();
+	void StopTrace();
 
 protected:
 	// Called when the game starts
 	virtual void BeginPlay() override;
 
 	void SwordTracingLoop();
+	void ApplyDamage(const FHitResult& Hit);
 
 public:	
 	// Called every frame
@@ -39,13 +44,21 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Attack System")
 	TArray<UAnimMontage*> AttackAnims;
 
-	TObjectPtr<USkeletalMeshComponent> Mesh;
+	UPROPERTY(EditAnywhere, Category = "Attack System", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<UCameraShakeBase> CameraShake;
+	
+	UPROPERTY(EditAnywhere, Category = "Attack System", meta = (AllowPrivateAccess = "true"))
+	UParticleSystem* BloodSplatter;
+	
+	TObjectPtr<ATP_SandboxCharacter> Character;
 	
 protected:
 	bool IsAttacking;
 	bool CanAttack = true;
 	bool AttackQueued;
 	uint32 CurrentAttackIndex = 0;
-	FTimerHandle SwordTraceTimerHandle;
+	FTimerHandle TraceTimerHandle;
+	FTimerHandle DamageRestTimerHandle;
+	bool bCanApplyDamage = true;
 		
 };

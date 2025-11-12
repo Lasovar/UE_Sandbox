@@ -15,6 +15,10 @@
 #include "InputActionValue.h"
 #include "MotionWarpingComponent.h"
 #include "PlayerStats.h"
+#include "Components/ArrowComponent.h"
+#include "Kismet/KismetMathLibrary.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Player/EquipmentSystem.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -52,16 +56,31 @@ ATP_SandboxCharacter::ATP_SandboxCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
+	Health = CreateDefaultSubobject<UHealthComponent>(TEXT("Health Component"));
+	Health->OnDeath.AddDynamic(this, &ATP_SandboxCharacter::OnDeath);
+
 	Stats = CreateDefaultSubobject<UPlayerStats>(TEXT("Player Stats"));
-	Stats->OnDeath.AddDynamic(this, &ATP_SandboxCharacter::OnDeath);
 	Stats->OnStaminaUpdated.AddDynamic(this, &ATP_SandboxCharacter::OnStaminaUpdated);
 
+	EquipmentSystem = CreateDefaultSubobject<UEquipmentSystem>("EquipmentSystem");
+	
 	AttackSystem = CreateDefaultSubobject<UAttackSystem>(TEXT("Attack System"));
 
-	OnTakeAnyDamage.AddDynamic(this, &ATP_SandboxCharacter::OnTakeDamage);
+	SwordMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SwordMesh"));
+	SwordMesh->SetupAttachment(GetMesh(), TEXT("HandGrip_R"));
+
+	SwordTopPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("SwordTopPoint"));
+	SwordTopPoint->SetupAttachment(SwordMesh);
+
+	SwordBottomPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("SwordBottomPoint"));
+	SwordBottomPoint->SetupAttachment(SwordMesh);
+
+	MeleeAttackPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("MeleeAttackPoint"));
+	MeleeAttackPoint->SetupAttachment(RootComponent);
 
 	OnVaultMontageEnded.BindUObject(this, &ATP_SandboxCharacter::VaultMontageEnded);
-	
+	OnDodgeRollMontageEnded.BindUObject(this, &ATP_SandboxCharacter::DodgeRollMontageEnded);
+
 	StaminaRegenTimer = FTimer(StaminaRegenDelay);
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
@@ -86,6 +105,16 @@ void ATP_SandboxCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		// Attacking
 		EnhancedInputComponent->BindAction(AttackAction, ETriggerEvent::Started, this, &ATP_SandboxCharacter::Attack);
 
+		// Target Lock
+		EnhancedInputComponent->BindAction(TargetLockAction, ETriggerEvent::Started, this,
+		                                   &ATP_SandboxCharacter::TargetLock);
+
+		// Interact
+		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &ATP_SandboxCharacter::Interact);
+		
+		// Dodge Roll
+		EnhancedInputComponent->BindAction(DodgeRollAction, ETriggerEvent::Started, this, &ATP_SandboxCharacter::DodgeRoll);
+		
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ATP_SandboxCharacter::Move);
 		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this,
@@ -106,6 +135,8 @@ void ATP_SandboxCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 void ATP_SandboxCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+
+	OnTakeAnyDamage.AddDynamic(this, &ATP_SandboxCharacter::OnTakeDamage);
 }
 
 void ATP_SandboxCharacter::Tick(float DeltaTime)
@@ -114,7 +145,8 @@ void ATP_SandboxCharacter::Tick(float DeltaTime)
 
 	if (IsSprinting)
 	{
-		if (GetVelocity().Length() > 5 && GetCharacterMovement()->MovementMode == MOVE_Walking && !Stats->DecreaseStamina(StaminaDepletingSpeed * DeltaTime))
+		if (GetVelocity().Length() > 5 && GetCharacterMovement()->MovementMode == MOVE_Walking && !Stats->
+			DecreaseStamina(StaminaDepletingSpeed * DeltaTime))
 		{
 			IsSprinting = false;
 			GetCharacterMovement()->MaxWalkSpeed = 500.0f;
@@ -133,6 +165,17 @@ void ATP_SandboxCharacter::Tick(float DeltaTime)
 	if (StaminaRegenTimer.IsElapsed())
 	{
 		Stats->IncreaseStamina(StaminaRegenRate * DeltaTime);
+	}
+
+	// Target Lock
+	if (CameraTarget)
+	{
+		const FRotator Rotation = UKismetMathLibrary::FindLookAtRotation(
+			GetActorLocation(),
+			CameraTarget->GetActorLocation() - FVector(0.0f, 0.0f, 100.0f)
+		);
+
+		GetController()->SetControlRotation(Rotation);
 	}
 }
 
@@ -165,9 +208,72 @@ void ATP_SandboxCharacter::Look(const FInputActionValue& Value)
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
 }
 
+void ATP_SandboxCharacter::Interact(const FInputActionValue& Value)
+{
+	EquipmentSystem->TryPickupItem();
+}
+
 void ATP_SandboxCharacter::Attack(const FInputActionValue& Value)
 {
 	AttackSystem->SwordAttack();
+}
+
+void ATP_SandboxCharacter::TargetLock(const FInputActionValue& Value)
+{
+	if (CameraTarget)
+	{
+		CameraTarget = nullptr;
+		return;
+	}
+
+	CameraTarget = nullptr;
+	
+	FVector Start = FollowCamera->GetComponentLocation();
+	TArray<FHitResult> Hits;
+
+	if (UKismetSystemLibrary::SphereTraceMulti(
+		this,
+		Start + FollowCamera->GetForwardVector() * 500.0f,
+		Start + FollowCamera->GetForwardVector() * 1000.0f,
+		125.0f,
+		TraceTypeQuery1,
+		false,
+		TArray<AActor*>(),
+		EDrawDebugTrace::ForDuration,
+		Hits,
+		true
+	))
+	{
+		for (const auto& Hit : Hits)
+		{
+			if (Hit.GetActor()->ActorHasTag("Damageable"))
+			{
+				CameraTarget = Hit.GetActor();
+				break;
+			}
+		}
+	}
+}
+
+void ATP_SandboxCharacter::DodgeRoll(const FInputActionValue& Value)
+{
+	if (IsDodging)
+	{
+		return;
+	}
+	
+	IsDodging = true;
+	AttackSystem->CancelAttack();
+	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+	{
+		AnimInstance->Montage_Play(DodgeRollMontage);
+		AnimInstance->Montage_SetEndDelegate(OnDodgeRollMontageEnded);
+	}
+}
+
+void ATP_SandboxCharacter::DodgeRollMontageEnded(UAnimMontage* vaultMontage, bool interrupted)
+{
+	IsDodging = false;
 }
 
 void ATP_SandboxCharacter::VaultMotionWarp()
@@ -228,7 +334,7 @@ void ATP_SandboxCharacter::VaultMontageEnded(UAnimMontage* vaultMontage, bool in
 void ATP_SandboxCharacter::OnTakeDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType,
                                         AController* InstigatedBy, AActor* DamageCauser)
 {
-	Stats->DecreaseHealth(Damage);
+	Health->DecreaseHealth(Damage);
 }
 
 void ATP_SandboxCharacter::OnDeath()
@@ -238,7 +344,6 @@ void ATP_SandboxCharacter::OnDeath()
 		DisableInput(playerController);
 	}
 	GetMesh()->SetSimulatePhysics(true);
-	UE_LOG(LogTemp, Display, TEXT("OnDeath"));
 }
 
 void ATP_SandboxCharacter::OnStaminaUpdated(float currentStamina, float previousStamina, float maxStamina)
@@ -251,28 +356,38 @@ void ATP_SandboxCharacter::OnStaminaUpdated(float currentStamina, float previous
 
 void ATP_SandboxCharacter::DoVault()
 {
-	const FName TraceTag("MyTraceTag");
+	const FName TraceTag("VaultTrace");
 
 	GetWorld()->DebugDrawTraceTag = TraceTag;
 
 	FCollisionQueryParams CollisionParams;
 	CollisionParams.TraceTag = TraceTag;
+	CollisionParams.AddIgnoredActor(this);
 
 	FHitResult horiHit;
 	FCollisionShape heightSphere = FCollisionShape::MakeSphere(5);
+	bool isHit = false;
 
 	for (int i = 0; i < 3; i++)
 	{
 		FVector start = GetActorLocation() + FVector(0, 0, i * 30);
-		FVector end = start + GetActorForwardVector() * 180.0f;
-		if (GetWorld()->SweepSingleByChannel(horiHit, start, end, FQuat::Identity, ECC_Visibility, heightSphere,
-		                                     CollisionParams))
+		FVector end = start + GetActorForwardVector() * 450.0f;
+		if (GetWorld()->SweepSingleByChannel(
+			horiHit,
+			start,
+			end,
+			FQuat::Identity,
+			ECC_Visibility,
+			heightSphere,
+			CollisionParams
+		))
 		{
+			isHit = true;
 			break;
 		}
 	}
 
-	if (!horiHit.IsValidBlockingHit())
+	if (!isHit)
 		return;
 
 	FCollisionShape distanceSphere = FCollisionShape::MakeSphere(10);
@@ -286,15 +401,20 @@ void ATP_SandboxCharacter::DoVault()
 		if (GetWorld()->SweepSingleByChannel(vertHit, start, end, FQuat::Identity, ECC_Visibility, distanceSphere,
 		                                     CollisionParams))
 		{
+			if (vertHit.bStartPenetrating)
+			{
+				CanWarp = false;
+				VaultLandPosition = FVector(0, 0, 20000);
+				break;
+			}
+			
 			if (i == 0)
 			{
 				VaultStartPosition = vertHit.Location;
-				DrawDebugSphere(GetWorld(), VaultStartPosition, 10, 12, FColor::Red, true, 0.5f);
 			}
 
 			VaultMiddlePosition = vertHit.Location;
 			CanWarp = true;
-			DrawDebugSphere(GetWorld(), VaultMiddlePosition, 10, 12, FColor::Red, true, 0.5f);
 		}
 		else
 		{

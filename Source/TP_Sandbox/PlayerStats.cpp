@@ -3,6 +3,8 @@
 
 #include "PlayerStats.h"
 
+#include "GeometryCollection/GeometryCollectionParticlesData.h"
+
 // Sets default values for this component's properties
 UPlayerStats::UPlayerStats()
 {
@@ -11,32 +13,6 @@ UPlayerStats::UPlayerStats()
 	PrimaryComponentTick.bCanEverTick = true;
 
 	// ...
-}
-
-bool UPlayerStats::DecreaseHealth(float Amount)
-{
-	CurrentHealth = FMath::Clamp(CurrentHealth - Amount, 0, MaxHealth);
-	OnHealthUpdated.Broadcast(CurrentHealth, MaxHealth);
-	if (IsDead())
-	{
-		OnDeath.Broadcast();
-		return true;
-	}
-
-	return false;
-}
-
-void UPlayerStats::IncreaseHealth(float Amount)
-{
-	CurrentHealth = FMath::Clamp(CurrentHealth + Amount, 0, MaxHealth);
-	OnHealthUpdated.Broadcast(CurrentHealth, MaxHealth);
-}
-
-void UPlayerStats::IncreaseMaxHealth(float Amount)
-{
-	MaxHealth += Amount;
-	CurrentHealth = MaxHealth;
-	OnHealthUpdated.Broadcast(CurrentHealth, MaxHealth);
 }
 
 bool UPlayerStats::DecreaseStamina(float Amount)
@@ -70,7 +46,7 @@ void UPlayerStats::IncreaseXp(float Amount)
 		CurrentXp -= MaxXp;
 		MaxXp += MaxXp * 0.1f;
 		CurrentLevel++;
-		OnLevelUpdate.Broadcast(CurrentLevel);
+		OnLevelUpdate.Broadcast(CurrentLevel, true);
 	}
 	
 	OnXpUpdated.Broadcast(CurrentXp, MaxXp);
@@ -82,8 +58,13 @@ void UPlayerStats::BeginPlay()
 	Super::BeginPlay();
 
 	// ...
-	CurrentHealth = MaxHealth;
 	CurrentStamina = MaxStamina;
+	GetWorld()->GetTimerManager().SetTimerForNextTick([this]
+	{
+		OnStaminaUpdated.Broadcast(CurrentStamina, CurrentStamina, MaxStamina);
+		OnXpUpdated.Broadcast(CurrentXp, MaxXp);
+		OnLevelUpdate.Broadcast(CurrentLevel, false);
+	});
 }
 
 

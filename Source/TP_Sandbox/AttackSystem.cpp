@@ -3,6 +3,10 @@
 
 #include "AttackSystem.h"
 
+#include "TP_SandboxCharacter.h"
+#include "Engine/DamageEvents.h"
+#include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 
 // Sets default values for this component's properties
@@ -15,39 +19,34 @@ UAttackSystem::UAttackSystem()
 	// ...
 }
 
-
 // Called when the game starts
 void UAttackSystem::BeginPlay()
 {
 	Super::BeginPlay();
-	
-	
+
+
 	// ...
-	Mesh = GetOwner()->FindComponentByClass<USkeletalMeshComponent>();
+	Character = Cast<ATP_SandboxCharacter>(GetOuter());
 }
 
-void UAttackSystem::SwordTracingLoop()
+// Called every frame
+void UAttackSystem::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
-	FHitResult Hit;
-	UKismetSystemLibrary::SphereTraceSingle(
-		GetWorld(),
-		FVector(0, 0, 0),
-		FVector(0, 0, 0),
-		50.0f,
-		TraceTypeQuery1,
-		false,
-		TArray<AActor*>(),
-		EDrawDebugTrace::None,
-		Hit,
-		true
-	);
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// ...
+	if (CanAttack && AttackQueued && !IsAttacking)
+	{
+		SwordAttack();
+		AttackQueued = false;
+	}
 }
 
 void UAttackSystem::SwordAttack()
 {
-	if (!Mesh)
+	if (!Character)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("AttackSystem: No Mesh found on Owner"));
+		UE_LOG(LogTemp, Warning, TEXT("AttackSystem: No Owner found"));
 		return;
 	}
 
@@ -60,7 +59,7 @@ void UAttackSystem::SwordAttack()
 	CanAttack = false;
 	IsAttacking = true;
 
-	if (UAnimInstance* AnimInstance = Mesh->GetAnimInstance())
+	if (UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance())
 	{
 		if (AttackAnims.IsValidIndex(CurrentAttackIndex))
 		{
@@ -89,10 +88,76 @@ void UAttackSystem::CancelAttack()
 	AttackQueued = false;
 }
 
+void UAttackSystem::ApplyDamage(const FHitResult& Hit)
+{
+	if (!bCanApplyDamage)
+		return;
+
+	if (!Hit.GetActor()->ActorHasTag("Damageable"))
+		return;
+
+	Hit.GetActor()->TakeDamage(25.0f, FDamageEvent(), Character->GetController(), Character);
+	bCanApplyDamage = false;
+
+	GetWorld()->GetTimerManager().SetTimer(
+		DamageRestTimerHandle,
+		[this]
+		{
+			bCanApplyDamage = true;
+		},
+		0.2f,
+		false
+	);
+
+	// Effects
+	UGameplayStatics::PlayWorldCameraShake(GetOwner(), CameraShake, Hit.Location, 0.0f, 2000.0f, 1.0f);
+	FRotator rotation = UKismetMathLibrary::MakeRotFromXY(Hit.Normal, Hit.Normal);
+	UGameplayStatics::SpawnEmitterAtLocation(
+		GetOwner(),
+		BloodSplatter,
+		Hit.Location,
+		rotation,
+		FVector(.4f),
+		true,
+		EPSCPoolMethod::AutoRelease
+	);
+}
+
+void UAttackSystem::StartMeleeTrace()
+{
+	if (!bCanApplyDamage)
+	{
+		return;
+	}
+
+	FHitResult Hit;
+	FVector attackPoint = Character->GetMeleeAttackPointLocation();
+	if (UKismetSystemLibrary::SphereTraceSingle(
+		GetOwner(),
+		attackPoint,
+		attackPoint,
+		35.0f,
+		TraceTypeQuery1,
+		false,
+		TArray<AActor*>(),
+		EDrawDebugTrace::None,
+		Hit,
+		true
+	))
+	{
+		ApplyDamage(Hit);
+	}
+}
+
 void UAttackSystem::StartSwordTrace()
 {
+	if (!bCanApplyDamage)
+	{
+		return;
+	}
+
 	GetWorld()->GetTimerManager().SetTimer(
-		SwordTraceTimerHandle,
+		TraceTimerHandle,
 		this,
 		&UAttackSystem::SwordTracingLoop,
 		0.1f,
@@ -100,16 +165,28 @@ void UAttackSystem::StartSwordTrace()
 	);
 }
 
-
-// Called every frame
-void UAttackSystem::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+void UAttackSystem::StopTrace()
 {
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	GetWorld()->GetTimerManager().ClearTimer(TraceTimerHandle);
+}
 
-	// ...
-	if (CanAttack && AttackQueued && !IsAttacking)
+
+void UAttackSystem::SwordTracingLoop()
+{
+	FHitResult Hit;
+	if (UKismetSystemLibrary::SphereTraceSingle(
+		GetOwner(),
+		Character->GetSwordTopPointLocation(),
+		Character->GetSwordBottomPointLocation(),
+		12.0f,
+		TraceTypeQuery1,
+		false,
+		TArray<AActor*>(),
+		EDrawDebugTrace::None,
+		Hit,
+		true
+	))
 	{
-		SwordAttack();
-		AttackQueued = false;
+		ApplyDamage(Hit);
 	}
 }

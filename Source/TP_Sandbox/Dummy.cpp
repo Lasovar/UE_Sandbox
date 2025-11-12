@@ -3,8 +3,8 @@
 
 #include "Dummy.h"
 
+#include "HealthComponent.h"
 #include "TP_SandboxCharacter.h"
-#include "AssetTypeActions/AssetDefinition_SoundBase.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/WidgetComponent.h"
@@ -17,6 +17,9 @@ ADummy::ADummy()
 	// Set this character to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
+	Health = CreateDefaultSubobject<UHealthComponent>("Health Component");
+	Health->OnDeath.AddDynamic(this, &ADummy::OnDeath);
+	
 	AssassinRef = CreateOptionalDefaultSubobject<USkeletalMeshComponent>("AssassinRef");
 	AssassinRef->SetupAttachment(GetCapsuleComponent());
 
@@ -32,6 +35,9 @@ ADummy::ADummy()
 		AssassinationRadius->OnComponentBeginOverlap.AddDynamic(this, &ADummy::OnOverlapBegin);
 		AssassinationRadius->OnComponentEndOverlap.AddDynamic(this, &ADummy::OnOverlapEnd);
 	}
+
+	UIWidget = CreateDefaultSubobject<UWidgetComponent>("World UI");
+	UIWidget->SetupAttachment(RootComponent);
 }
 
 // Called when the game starts or when spawned
@@ -39,10 +45,18 @@ void ADummy::BeginPlay()
 {
 	Super::BeginPlay();
 
+	OnTakeAnyDamage.AddDynamic(this, &ADummy::OnTakeDamage);
+	
 	if (AssassinationWidget)
 	{
 		AssassinationWidget->SetVisibility(false);
 	}
+}
+
+void ADummy::OnDeath()
+{
+	GetMesh()->SetSimulatePhysics(true);
+	UIWidget->SetVisibility(false);
 }
 
 // Called every frame
@@ -50,10 +64,27 @@ void ADummy::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	const APlayerController* PC = UGameplayStatics::GetPlayerController(GetController(), 0);
 	AssassinationWidget->SetWorldRotation(UKismetMathLibrary::FindLookAtRotation(
 		AssassinationWidget->GetComponentLocation(),
-		GetWorld()->GetFirstPlayerController()->PlayerCameraManager->GetCameraLocation()
+		PC->PlayerCameraManager->GetCameraLocation()
 	));
+	
+
+	UIWidget->SetWorldRotation(UKismetMathLibrary::FindLookAtRotation(
+		UIWidget->GetComponentLocation(),
+		PC->PlayerCameraManager->GetCameraLocation()	
+	));
+}
+
+void ADummy::OnTakeDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType,
+                          AController* InstigatedBy, AActor* DamageCauser)
+{
+	Health->DecreaseHealth(Damage);
+	int hitIndex = UKismetMathLibrary::RandomInteger(HitReacts.Num());
+	GetMesh()->GetAnimInstance()->Montage_Play(HitReacts[hitIndex]);
+
+	LaunchCharacter(DamageCauser->GetActorForwardVector() * 700.0f, false, false);
 }
 
 // Called to bind functionality to input
@@ -88,8 +119,6 @@ TTuple<FVector, FRotator> ADummy::Assassinate()
 	}
 
 	// Ragdoll
-
-
 	FTimerHandle TimerHandle;
 	GetWorld()->GetTimerManager().SetTimer(
 		TimerHandle,
